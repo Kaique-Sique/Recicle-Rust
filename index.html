@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Simulador 3D · RECYCLE RUSH 2015</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:#0e1621;color:#e6edf5;font:14px/1.4 system-ui,-apple-system,"Segoe UI",Arial,sans-serif;overflow:hidden}
+#ui{position:fixed;left:0;top:0;bottom:0;width:310px;overflow:auto;background:#162232;border-right:1px solid #2c3e55;padding:14px}
+#view{position:fixed;left:310px;right:0;top:0;bottom:0}
+@media(max-width:760px){#ui{width:100%;height:46%;bottom:auto;border-right:0;border-bottom:1px solid #2c3e55}#view{left:0;top:46%}}
+h1{font-size:17px;margin:0 0 10px}h3{font-size:13px;margin:14px 0 6px;color:#9fb0c3}
+button{font:inherit;color:#e6edf5;background:#22364f;border:1px solid #38506d;border-radius:6px;padding:7px 9px;cursor:pointer}
+button:hover{background:#2c4767}button:focus-visible{outline:2px solid #6fb0ee}
+.g{display:grid;gap:6px}.g5{grid-template-columns:repeat(5,1fr)}.g2{grid-template-columns:1fr 1fr}
+.ally button.on{outline:2px solid #fff}.red{background:#a52a2a;border-color:#d55}.blue{background:#1f4aa8;border-color:#58f}
+.warn{background:#5a3b12;border-color:#a37320}.bad{background:#5a1c1c;border-color:#a34040}
+table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:3px 4px;text-align:right;border-bottom:1px solid #2c3e55}th:first-child,td:first-child{text-align:left}
+.tot td{font-weight:700;font-size:16px}#msg{min-height:20px;color:#ffd27a;margin-top:8px;font-size:13px}
+small{color:#9fb0c3;display:block;margin-top:8px}
+</style>
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.1/examples/jsm/"}}
+</script>
+</head>
+<body>
+<aside id="ui">
+  <h1>Simulador 3D · RECYCLE RUSH 2015</h1>
+  <h3>Aliança ativa</h3>
+  <div class="g g2 ally"><button class="red on" data-ally="red">Vermelha</button><button class="blue" data-ally="blue">Azul</button></div>
+  <h3>Adicionar pilha de totes</h3>
+  <div class="g g5" id="stackBtns"></div>
+  <h3>Cobertura</h3>
+  <div class="g g2"><button id="bCont">+ Container</button><button id="bLit">+ Litter</button></div>
+  <h3>Montagem rápida</h3>
+  <div class="g"><button id="bFill">Encher plataformas</button><button id="bCoop" class="warn">Coopertition STACK (4 amarelos)</button></div>
+  <div class="g g2" style="margin-top:6px"><button id="bClrA" class="bad">Limpar aliança</button><button id="bClrAll" class="bad">Limpar tudo</button></div>
+  <div id="msg"></div>
+  <h3>Pontuação</h3><div id="score"></div>
+  <h3>Capacidade e estoque</h3><div id="cap"></div>
+  <small>Arraste para orbitar, roda para zoom, botão direito para pan. Dimensões em polegadas, conforme o manual (Cap. 2). O nível do container é igual ao número de totes sob ele (12,1 in por tote contra 11,875 in por nível, validado com a Fig. 3-4).</small>
+</aside>
+<div id="view"></div>
+
+<script type="module">
+import * as THREE from 'three';
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+
+/* ============ Dimensões oficiais (polegadas) ============ */
+const D = {
+  fieldL:648, fieldW:324,
+  stepW:25, stepH:6.25, lip:0.375,
+  platL:187, platW:20, platH:2, ramp:7.125, rampDeg:16,
+  backH:78, backW:17, mark0:9.375, markDz:11.875,
+  toteX:16.9, toteY:12.1, toteZ:26.9,
+  contH:28.8, contTop:21.9, contBot:18,
+  litL:57, litD:2.6,
+  landmarkX:161,
+  platOff:39,
+  rail:162, wallH:78, autoW:74, landfillW:51
+};
+const LIM = {gray:128, containers:10, litter:10};
+const PERSLOT = Math.floor(D.platL / D.toteZ);
+const rampRun = D.ramp * Math.cos(D.rampDeg*Math.PI/180);
+
+/* ============ Cena ============ */
+const view = document.getElementById('view');
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+view.appendChild(renderer.domElement);
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x0e1621);
+const camera = new THREE.PerspectiveCamera(45,1,1,4000);
+camera.position.set(0,520,640);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0,20,0); controls.enableDamping = true; controls.maxPolarAngle = Math.PI*0.49;
+scene.add(new THREE.HemisphereLight(0xffffff,0x334455,1.1));
+const sun = new THREE.DirectionalLight(0xffffff,1.4); sun.position.set(-300,600,300); scene.add(sun);
+
+const mat = (c,o={}) => new THREE.MeshStandardMaterial({color:c,roughness:.85,metalness:.05,...o});
+const box = (w,h,d,m,x,y,z) => { const o=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),m); o.position.set(x,y,z); scene.add(o); return o; };
+const COL = {red:0xb02a2a, blue:0x2450b8};
+
+/* ============ Arena ============ */
+const slots = {red:[], blue:[]};
+function buildArena(){
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(2400,2000), mat(0x1a2430)); floor.rotation.x=-Math.PI/2; floor.position.y=-0.2; scene.add(floor);
+  for (const [a,s] of [['red',1],['blue',-1]]){
+    const c = new THREE.Mesh(new THREE.PlaneGeometry(D.fieldL/2,D.fieldW), mat(COL[a],{roughness:1})); c.rotation.x=-Math.PI/2; c.position.set(s*D.fieldL/4,0,0); scene.add(c);
+    const tape = mat(0xffd21f,{transparent:true,opacity:.35});
+    const az = new THREE.Mesh(new THREE.PlaneGeometry(D.autoW,D.fieldW), tape); az.rotation.x=-Math.PI/2; az.position.set(s*D.landmarkX,.1,0); scene.add(az);
+    const lf = new THREE.Mesh(new THREE.PlaneGeometry(D.landfillW,D.fieldW), tape); lf.rotation.x=-Math.PI/2; lf.position.set(s*(D.stepW/2+D.landfillW/2),.1,0); scene.add(lf);
+    box(1,D.wallH,D.fieldW,mat(COL[a],{transparent:true,opacity:.22}),s*D.fieldL/2,D.wallH/2,0);
+    box(D.lip,D.stepH+0.375,D.fieldW,mat(COL[a]),s*(D.stepW/2+D.lip/2),(D.stepH+.375)/2,0);
+    const plats = [{x:s*(D.landmarkX-D.platOff-rampRun-D.platW/2), f:-s},
+                   {x:s*(D.landmarkX+D.platOff+rampRun+D.platW/2), f: s}];
+    for (const p of plats){
+      const sh = new THREE.Shape(); const hb=D.platW/2+rampRun, ht=D.platW/2;
+      sh.moveTo(-hb,0); sh.lineTo(hb,0); sh.lineTo(ht,D.platH); sh.lineTo(-ht,D.platH); sh.closePath();
+      const g = new THREE.ExtrudeGeometry(sh,{depth:D.platL,bevelEnabled:false}); g.translate(0,0,-D.platL/2);
+      const m = new THREE.Mesh(g, mat(0xeeeeee)); m.position.set(p.x,0,p.f*(D.rail-D.platL/2)); scene.add(m);
+      const bz = p.f*(D.rail-0.6), post = new THREE.CylinderGeometry(.625,.625,D.backH,10), black = mat(0x111111);
+      for (const dx of [-D.backW/2, D.backW/2]){
+        const o = new THREE.Mesh(post,black); o.position.set(p.x+dx,D.backH/2,bz); scene.add(o);
+        for (let k=0;k<6;k++) box(1.6,.8,1.6,mat(0xffffff),p.x+dx,D.platH+D.mark0+k*D.markDz,bz);
+      }
+      box(D.backW+1.25,1.25,1.25,black,p.x,D.backH,bz);
+      for (let k=0;k<PERSLOT;k++) slots[a].push({x:p.x, z:p.f*(D.rail-1-D.toteZ/2-k*D.toteZ), stack:null});
+    }
+  }
+  box(D.stepW,D.stepH,D.fieldW,mat(0xf2f2f2),0,D.stepH/2,0);
+  for (const z of [-D.rail,D.rail]) box(D.fieldL,20,1.5,mat(0x9aa4af,{transparent:true,opacity:.6}),0,10,z+Math.sign(z)*.75);
+}
+buildArena();
+
+/* ============ Peças ============ */
+const toteGeo = new THREE.BoxGeometry(D.toteX,D.toteY,D.toteZ), toteEdge = new THREE.EdgesGeometry(toteGeo);
+const edgeMat = new THREE.LineBasicMaterial({color:0x222222});
+const grayMat = mat(0x8a8d91), yellowMat = mat(0xe5b92b);
+const contGeo = new THREE.CylinderGeometry(D.contTop/2,D.contBot/2,D.contH,28), contMat = mat(0x1f6b2d);
+const litGeo = new THREE.CylinderGeometry(D.litD/2,D.litD/2,D.litL,10), litMat = mat(0x7ddc3a);
+function makeTote(m,y){ const o=new THREE.Mesh(toteGeo,m); o.position.y=y; o.add(new THREE.LineSegments(toteEdge,edgeMat)); return o; }
+
+/* ============ Estado e regras ============ */
+const S = {ally:'red', stacks:[], coop:null};
+const msgEl = document.getElementById('msg'); let msgT;
+const msg = t => { msgEl.textContent=t; clearTimeout(msgT); msgT=setTimeout(()=>msgEl.textContent='',4000); };
+const totes = () => S.stacks.reduce((n,s)=>n+s.n,0);
+const conts = () => S.stacks.filter(s=>s.c).length;
+const lits = a => S.stacks.filter(s=>s.a===a&&s.l).length;
+
+function createStack(n,a){
+  const slot = slots[a].find(s=>!s.stack);
+  if (!slot) return 'Plataformas cheias: '+slots[a].length+' pilhas por aliança.';
+  if (totes()+n > LIM.gray) return 'Acabaram os totes cinza ('+LIM.gray+' no campo).';
+  const g = new THREE.Group(); g.position.set(slot.x,D.platH,slot.z);
+  for (let i=0;i<n;i++) g.add(makeTote(grayMat,D.toteY*(i+.5)));
+  scene.add(g);
+  const st = {a,n,c:false,l:false,g,slot}; slot.stack=st; S.stacks.push(st); return st;
+}
+function setContainer(st){
+  if (st.c) return 'A última pilha já tem container.';
+  if (conts() >= LIM.containers) return 'Só existem '+LIM.containers+' containers no campo.';
+  const m = new THREE.Mesh(contGeo,contMat); m.position.y = D.toteY*st.n + D.contH/2; st.g.add(m); st.c=true; return true;
+}
+function setLitter(st){
+  if (!st.c) return 'Coloque um container antes do litter.';
+  if (st.l) return 'Esse container já tem litter.';
+  if (lits(st.a) >= LIM.litter) return 'A aliança só tem '+LIM.litter+' litter.';
+  const m = new THREE.Mesh(litGeo,litMat); m.position.set(2,D.toteY*st.n+D.contH+8,0); m.rotation.z=.12; st.g.add(m); st.l=true; return true;
+}
+const lastOf = a => [...S.stacks].reverse().find(s=>s.a===a);
+function clearAlly(a){ S.stacks.filter(s=>s.a===a).forEach(s=>{scene.remove(s.g); s.slot.stack=null;}); S.stacks=S.stacks.filter(s=>s.a!==a); }
+function clearCoop(){ if(S.coop){scene.remove(S.coop);S.coop=null;} }
+
+/* ============ Pontuação ============ */
+function score(a){
+  const mine = S.stacks.filter(s=>s.a===a);
+  const t = mine.reduce((n,s)=>n+2*s.n,0);
+  const c = mine.reduce((n,s)=>n+(s.c?4*s.n:0),0);
+  const l = mine.reduce((n,s)=>n+(s.l?6:0),0);
+  const k = S.coop?40:0;
+  return {t,c,l,k,total:t+c+l+k,pilhas:mine.length};
+}
+function ui(){
+  const r=score('red'), b=score('blue'), row=(n,x,y)=>'<tr><td>'+n+'</td><td>'+x+'</td><td>'+y+'</td></tr>';
+  document.getElementById('score').innerHTML = '<table><tr><th></th><th style="color:#f77">Vermelha</th><th style="color:#79f">Azul</th></tr>'+
+    row('Totes (2 pts)',r.t,b.t)+row('Containers (4 × nível)',r.c,b.c)+row('Litter (6 pts)',r.l,b.l)+row('Coopertition STACK',r.k,b.k)+
+    '<tr class="tot"><td>Total</td><td>'+r.total+'</td><td>'+b.total+'</td></tr></table>';
+  document.getElementById('cap').innerHTML =
+    '<table>'+row('Pilhas por plataforma',PERSLOT+' ('+D.platL+' ÷ '+D.toteZ+')','')+
+    row('Pilhas usadas (de '+slots.red.length+')',r.pilhas,b.pilhas)+
+    row('Totes cinza (de '+LIM.gray+')',totes(),'')+row('Containers (de '+LIM.containers+')',conts(),'')+
+    row('Litter (de '+LIM.litter+' cada)',lits('red'),lits('blue'))+'</table>';
+}
+const run = r => { if (typeof r==='string') msg(r); ui(); };
+
+/* ============ Botões ============ */
+const sb = document.getElementById('stackBtns');
+for (let n=2;n<=6;n++){ const b=document.createElement('button'); b.textContent=n; b.title='Pilha de '+n+' totes'; b.onclick=()=>run(createStack(n,S.ally)); sb.appendChild(b); }
+document.querySelectorAll('[data-ally]').forEach(b=>b.onclick=()=>{ S.ally=b.dataset.ally; document.querySelectorAll('[data-ally]').forEach(x=>x.classList.toggle('on',x===b)); });
+document.getElementById('bCont').onclick=()=>{ const s=lastOf(S.ally); run(s?setContainer(s):'Adicione uma pilha primeiro.'); };
+document.getElementById('bLit').onclick=()=>{ const s=lastOf(S.ally); run(s?setLitter(s):'Adicione uma pilha primeiro.'); };
+document.getElementById('bFill').onclick=()=>{
+  clearAlly(S.ally); let k=0;
+  for (const sl of slots[S.ally]){ const st=createStack(6,S.ally); if (typeof st==='string'){ msg(st); break; }
+    if (k++<5 && setContainer(st)===true) setLitter(st); }
+  ui();
+};
+document.getElementById('bCoop').onclick=()=>{
+  if (S.coop) return msg('Coopertition STACK já montada.');
+  const g=new THREE.Group(); g.position.set(0,D.stepH,0);
+  for (let i=0;i<4;i++) g.add(makeTote(yellowMat,D.toteY*(i+.5)));
+  scene.add(g); S.coop=g; ui();
+};
+document.getElementById('bClrA').onclick=()=>{ clearAlly(S.ally); ui(); };
+document.getElementById('bClrAll').onclick=()=>{ clearAlly('red'); clearAlly('blue'); clearCoop(); ui(); };
+
+/* ============ Loop ============ */
+function resize(){ const w=view.clientWidth,h=view.clientHeight; renderer.setSize(w,h); camera.aspect=w/h; camera.updateProjectionMatrix(); }
+addEventListener('resize',resize); resize(); ui();
+renderer.setAnimationLoop(()=>{ controls.update(); renderer.render(scene,camera); });
+</script>
+</body>
+</html>
